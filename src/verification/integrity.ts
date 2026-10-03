@@ -1,16 +1,12 @@
 import { createHash } from "crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-import { join, relative, resolve } from "path";
+import { join, resolve } from "path";
 
 import { loadManifest } from "./manifest.js";
 import { matchesPattern, toRelative } from "../utils/glob.js";
+import type { IntegrityViolation } from "../agent/messages.js";
 
-export interface IntegrityViolation {
-  path: string;
-  kind: "modified" | "deleted";
-  expected: string;
-  actual: string;
-}
+export type { IntegrityViolation };
 
 export interface IntegritySnapshot {
   hashes: Map<string, string>;
@@ -119,13 +115,10 @@ export function checkIntegrity(snapshot: IntegritySnapshot, cwd: string = proces
 }
 
 export function formatViolations(violations: IntegrityViolation[]): string {
-  const lines = violations.map((v) => {
-    const action = v.kind === "deleted" ? "deleted" : "modified";
-    return `  ✗ ${v.path} ${action}\n    expected ${v.expected}, found ${v.actual}`;
-  });
-  return lines.join("\n");
-}
-
-export function relativeToCwd(cwd: string, abs: string): string {
-  return relative(cwd, abs).replace(/\\/g, "/");
+  return violations
+    .map((v) => {
+      const action = v.kind === "deleted" ? "deleted" : "modified";
+      return `  x ${v.path} ${action}\n    expected ${v.expected}, found ${v.actual}`;
+    })
+    .join("\n");
 }

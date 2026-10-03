@@ -81,6 +81,46 @@ export async function runVerification(command: string): Promise<VerificationResu
   });
 }
 
+export interface SuiteOutcome {
+  label: "visible" | "heldOut";
+  command: string;
+  result: VerificationResult;
+}
+
+export interface CombinedVerdict {
+  passed: boolean;
+  suites: SuiteOutcome[];
+  /** The suite that decides the verdict. Held-out when configured. */
+  authoritative: SuiteOutcome;
+}
+
+/**
+ * Runs the visible suite and, when configured, the held-out suite.
+ *
+ * Both must be green. A held-out pass does not excuse a broken visible suite,
+ * because that still means the repository does not work.
+ */
+export async function runSuites(
+  visibleCommand: string,
+  heldOutCommand?: string
+): Promise<CombinedVerdict> {
+  const visible = await runVerification(visibleCommand);
+  const suites: SuiteOutcome[] = [{ label: "visible", command: visibleCommand, result: visible }];
+
+  if (heldOutCommand) {
+    const heldOut = await runVerification(heldOutCommand);
+    suites.push({ label: "heldOut", command: heldOutCommand, result: heldOut });
+  }
+
+  const authoritative = suites.find((s) => s.label === "heldOut") ?? suites[0];
+
+  return {
+    passed: suites.every((s) => s.result.passed),
+    suites,
+    authoritative,
+  };
+}
+
 export function formatVerificationOutput(result: VerificationResult, attempt: number, maxAttempts: number): string {
   const divider = "────────────────────────────────────";
 

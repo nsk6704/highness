@@ -115,12 +115,21 @@ export interface VerificationResult {
   vacuous?: boolean;
 }
 
+export interface IntegrityViolation {
+  path: string;
+  kind: "modified" | "deleted";
+  expected: string;
+  actual: string;
+}
+
 export interface Session {
   task: string;
   messages: Message[];
   attempts: number;
   toolCalls: Array<{ name: string; args: Record<string, unknown>; result: ToolResult }>;
   verificationResults: VerificationResult[];
+  /** Populated when the agent tampered with what the verdict depends on. */
+  integrityViolations?: IntegrityViolation[];
 }
 
 export const DEFAULT_MAX_ATTEMPTS = 3;
