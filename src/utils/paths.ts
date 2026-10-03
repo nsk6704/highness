@@ -1,15 +1,16 @@
 import { resolve, relative, isAbsolute } from "path";
 
-const cwd = process.cwd();
+export const cwd = process.cwd();
 
+/** Resolves a repo-relative path and rejects traversal outside the repository. */
 export function resolvePath(userPath: string): string {
   const resolved = resolve(cwd, userPath);
   const relativePath = relative(cwd, resolved);
-  
+
   if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
     throw new Error(`Path traversal not allowed: ${userPath}`);
   }
-  
+
   return resolved;
 }
 

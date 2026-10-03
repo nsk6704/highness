@@ -1,6 +1,7 @@
-import { Tool, ToolDefinition, ToolResult } from "../agent/messages.js";
-import { resolvePath } from "../utils/paths.js";
-import { readFile, writeFile } from "fs/promises";
+import { Tool, ToolResult } from "../agent/messages.js";
+import { resolvePath, cwd } from "../utils/paths.js";
+import { assertReadable } from "./guard.js";
+import { readFile } from "fs/promises";
 
 const ReadFileParams = {
   type: "object",
@@ -19,6 +20,7 @@ export const readFileTool: Tool = {
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
     try {
       const path = resolvePath(args.path as string);
+      assertReadable(cwd, path);
       const content = await readFile(path, "utf-8");
       return { success: true, output: content };
     } catch (error) {

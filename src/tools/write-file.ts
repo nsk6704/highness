@@ -1,5 +1,6 @@
 import { Tool, ToolResult } from "../agent/messages.js";
-import { resolvePath } from "../utils/paths.js";
+import { resolvePath, cwd } from "../utils/paths.js";
+import { assertWritable } from "./guard.js";
 import { writeFile, mkdir } from "fs/promises";
 import { dirname } from "path";
 
@@ -21,6 +22,7 @@ export const writeFileTool: Tool = {
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
     try {
       const path = resolvePath(args.path as string);
+      assertWritable(cwd, path);
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, args.content as string, "utf-8");
       return { success: true, output: `File written: ${args.path}` };

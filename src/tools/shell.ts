@@ -1,4 +1,6 @@
 import { Tool, ToolResult } from "../agent/messages.js";
+import { cwd } from "../utils/paths.js";
+import { assertShellAllowed } from "./guard.js";
 import { spawn } from "child_process";
 
 const ShellParams = {
@@ -20,11 +22,17 @@ export const shellTool: Tool = {
     const command = args.command as string;
     const timeout = (args.timeout as number) || 60000;
 
+    try {
+      assertShellAllowed(cwd, command);
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+
     return new Promise((resolve) => {
       const proc = spawn(command, {
         shell: true,
         stdio: ["ignore", "pipe", "pipe"],
-        cwd: process.cwd(),
+        cwd,
       });
 
       let stdout = "";
