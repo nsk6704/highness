@@ -39,23 +39,27 @@ The model can propose and execute changes, but **Highness owns verification and 
 ## Quick Start
 
 ```bash
-# Install
-npm install -g highness
+# From source (not published to npm yet)
+git clone https://github.com/nsk6704/highness
+cd highness
+npm install
+npm run build
 
 # Configure
 cp .env.example .env   # then add your Ollama Cloud API key
 
 # Run on a task
-highness "Fix the failing tests"
+./dist/cli.js "Fix the failing tests"
 ```
 
 Or run locally:
 
 ```bash
-git clone https://github.com/yourusername/highness
+git clone https://github.com/nsk6704/highness
 cd highness
 npm install
 npm run build
+cd demo-project && npm install && cd ..
 ./dist/cli.js "Fix the calculator so all tests pass"
 ```
 
@@ -74,14 +78,22 @@ The demo has a calculator with three intentional bugs:
 - `power` has an off-by-one error
 - `factorial` forgets to return the result
 
-Watch Highness:
+Baseline before you start: 6 of 17 tests fail.
+
+A typical run looks like this:
+
 1. Read the source and test files
 2. Identify the bugs
-3. Fix them
-4. Run tests → FAIL
-5. Analyze failure → Repair
-6. Run tests → PASS
-7. Declare success only after verification passes
+3. Edit the implementation
+4. Run `npm test` → **6 failed, 11 passed**
+5. Highness verification runs it independently → FAIL
+6. The failure is appended to the conversation and the model repairs
+7. Re-verify → PASS → success declared
+
+In practice `gpt-oss:120b` often solves these three seeded bugs in a single
+attempt, so the repair step may not trigger. That is the verifier working as
+intended rather than a bug, but it does mean the demo project is not a reliable
+way to showcase the repair loop — see [Roadmap](#roadmap).
 
 ## CLI Options
 
@@ -100,7 +112,7 @@ src/
 │   ├── loop.ts              # Core agent loop with repair logic
 │   └── messages.ts          # Type definitions (Message, Tool, Session, etc.)
 ├── model/
-│   ├── ollama.ts            # Ollama Cloud SDK integration
+│   ├── ollama.ts            # OpenAI SDK against Ollama's compat endpoint
 │   └── index.ts             # Model interface
 ├── tools/
 │   ├── read-file.ts         # Read file contents
@@ -184,33 +196,49 @@ Auto-detection works for common project types. Override with `--verify`.
 
 ## Repair Loop
 
-When verification fails, Highness appends the failure to the conversation:
+When verification fails, Highness appends the evidence to the conversation as a
+distinct `verification` message. Since Ollama's chat API has no such role, it is
+serialized as a user message:
 
 ```
-SYSTEM/HARNESS:
+[VERIFICATION FAILED]
+The requested change has NOT been verified.
+Command: npm test
+Attempt: 1
 
-The requested change has not been verified.
+Stdout:
+... (capped at 4000 chars)
 
-Verification command:
-npm test
+Stderr:
+...
 
-Result:
-FAILED
-
-Output:
-Expected 401, received 500.
-
-Repair the implementation and try again.
+Analyze the failure, repair the implementation, and try again.
 ```
+
+Control returns to the model, which can read files, edit, and run commands again.
 
 Maximum attempts: 3 (configurable with `-n`). If all fail:
 
 ```
-✗ Verification failed after 3 attempts
+✗ Verification failed after maximum attempts
+  Attempts: 3
 ```
 
-Highness does **not** claim success.
+Highness does **not** claim success, and exits non-zero.
+
+## Roadmap
+
+Roughly in priority order:
+
+- [ ] A demo task that reliably forces at least one repair cycle
+- [ ] Verifier triage — classify failures (compile error, assertion, timeout)
+      and hand the model only the relevant evidence
+- [ ] Anti-cheat: detect when a model edits tests or weakens the verify command
+      to force a PASS
+- [ ] `edit_file` via structured patches instead of full-content replacement
+- [ ] Per-attempt rollback when repair makes things worse
+- [ ] Session logging to disk for post-mortem analysis
 
 ## License
 
-MIT
+Unlicensed for now — add a LICENSE before making this a real OSS release.

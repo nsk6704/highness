@@ -80,7 +80,8 @@ Options:
   --help, -h          Show this help
 
 Environment:
-  OLLAMA_API_KEY      Optional - Default key provided for Ollama Cloud
+  OLLAMA_API_KEY      Required - Create one at https://ollama.com/settings/keys
+  OLLAMA_MODEL        Optional - Default: gpt-oss:120b
 `);
     process.exit(0);
   }
