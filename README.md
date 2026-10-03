@@ -32,18 +32,39 @@ Verification
 
 The model can propose and execute changes, but **Highness owns verification and recovery**. The model does not get to declare success. The runtime determines whether the task actually succeeded.
 
+## In Simple Words
+
+Highness gives an AI a coding task and lets it try to fix the code. Then Highness runs real tests to check the result. If the tests fail, the failure is sent back to the AI so it can try again.
+
+Some projects can also provide **held-out tests**. These are extra tests the AI is not allowed to read. They check whether the AI understood the requirement instead of fixing only the examples it saw.
+
+For example:
+
+```text
+Visible test: divide(6, 2) = 3
+Held-out test: divide(7, 2) = 3.5
+```
+
+The AI may pass the visible test with incorrect integer division. The held-out test catches that. Held-out tests are optional, but when they are configured, Highness requires both the visible and held-out tests to pass.
+
+In short:
+
+```text
+AI edits the code -> Highness tests it -> failures go back to the AI -> verified result
+```
+
 ## Why this isn't just CI
 
 A CI workflow runs your tests once and stops. Anyone can pass CI by editing the
 test file. That is the gap Highness closes:
 
-| | CI | A bare agent loop | Highness |
-|---|---|---|---|
-| Runs the tests | yes | yes | yes |
-| Closes the failure loop | no | yes | yes |
-| Tests the model can read are the only tests | yes | yes | **no** |
-| Editing a test is a normal commit | yes | yes | **voids the run** |
-| Zero tests found means pass | often | often | **means fail** |
+|                                             | CI    | A bare agent loop | Highness          |
+| ------------------------------------------- | ----- | ----------------- | ----------------- |
+| Runs the tests                              | yes   | yes               | yes               |
+| Closes the failure loop                     | no    | yes               | yes               |
+| Tests the model can read are the only tests | yes   | yes               | **no**            |
+| Editing a test is a normal commit           | yes   | yes               | **voids the run** |
+| Zero tests found means pass                 | often | often             | **means fail**    |
 
 ## Features
 
@@ -127,7 +148,13 @@ Projects opt in with `highness.config.json`:
   "heldOut": "npm test -- --config .highness/jest.heldout.config.mjs",
   "guard": {
     "denyRead": [".highness"],
-    "denyWrite": ["test", ".highness", "SPEC.md", "jest.config.mjs", "package.json"]
+    "denyWrite": [
+      "test",
+      ".highness",
+      "SPEC.md",
+      "jest.config.mjs",
+      "package.json"
+    ]
   },
   "integrityFiles": ["package.json", "jest.config.mjs"]
 }
