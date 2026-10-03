@@ -4,7 +4,7 @@
   "description": "Minimal verification-first coding agent harness",
   "main": "dist/cli.js",
   "bin": {
-    "highness": "dist/cli.js"
+    "highness": "bin/highness.cmd"
   },
   "scripts": {
     "build": "tsc",

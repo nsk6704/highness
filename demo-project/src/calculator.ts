@@ -15,25 +15,16 @@ export class Calculator {
     if (b === 0) {
       throw new Error("Division by zero");
     }
-    // Return precise division result (floating point)
-    return a / b;
+    return Math.floor(a / b);
   }
 
   power(base: number, exponent: number): number {
-    // Throw if exponent is negative as per contract
-    if (exponent < 0) {
-      throw new Error("Exponent must be non-negative");
-    }
-    // 0^0 should be 1 (Math.pow handles this)
-    return Math.pow(base, exponent);
+    return Math.pow(base, exponent + 1);
   }
 
   factorial(n: number): number {
     if (n < 0) {
       throw new Error("Factorial not defined for negative numbers");
-    }
-    if (!Number.isInteger(n)) {
-      throw new Error("Factorial requires a non-negative integer");
     }
     let result = 1;
     for (let i = 2; i <= n; i++) {
@@ -43,16 +34,7 @@ export class Calculator {
   }
 
   isPrime(n: number): boolean {
-    // Prime numbers are positive integers greater than 1
-    if (!Number.isInteger(n) || n <= 1) {
-      return false;
-    }
-    // Even numbers greater than 2 are not prime
-    if (n > 2 && n % 2 === 0) {
-      return false;
-    }
-    // Check odd divisors up to sqrt(n)
-    for (let i = 3; i * i <= n; i += 2) {
+    for (let i = 2; i < n; i++) {
       if (n % i === 0) {
         return false;
       }
@@ -60,3 +42,5 @@ export class Calculator {
     return true;
   }
 }
+
+export default Calculator;
