@@ -28,7 +28,7 @@ export class OllamaModel implements Model {
   private client: OpenAI;
   private model: string;
 
-  constructor(apiKey?: string, model: string = DEFAULT_MODEL) {
+  constructor(apiKey?: string, model: string = process.env.OLLAMA_MODEL || DEFAULT_MODEL) {
     this.client = new OpenAI({
       apiKey: apiKey || process.env.OLLAMA_API_KEY || "",
       baseURL: OLLAMA_BASE_URL,

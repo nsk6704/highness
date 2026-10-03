@@ -1,7 +1,22 @@
 import "dotenv/config";
+import { config as loadEnvFile } from "dotenv";
+import { resolve } from "path";
+import { existsSync } from "fs";
 import { OllamaModel } from "./model/index.js";
 import { runAgent, AgentEvent } from "./agent/loop.js";
 import { Session } from "./agent/messages.js";
+
+/**
+ * `dotenv/config` only reads a .env in the current working directory. Since
+ * the harness runs against a target project, that is usually the project
+ * rather than this package, so the documented root .env would never load.
+ * Fall back to the one beside the installed package.
+ */
+function ensureApiKey(): void {
+  if (process.env.OLLAMA_API_KEY) return;
+  const path = resolve(__dirname, "..", ".env");
+  if (existsSync(path)) loadEnvFile({ path });
+}
 
 function printBanner() {
   console.log("\nHighness");
@@ -130,6 +145,7 @@ Environment:
   printBanner();
   printTask(task);
 
+  ensureApiKey();
   const model = new OllamaModel();
 
   let finalSuccess = false;
