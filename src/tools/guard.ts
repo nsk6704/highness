@@ -32,20 +32,65 @@ export function assertWritable(cwd: string, absolutePath: string): void {
   check(cwd, absolutePath, denyRead, "modifying");
 }
 
+/** Splits a command into candidate path tokens, dropping flags and quotes. */
+function tokenize(command: string): string[] {
+  return command
+    .split(/[\s;|&<>()]+/)
+    .map((token) => token.replace(/^["']+|["']+$/g, ""))
+    .filter(Boolean);
+}
+
+/** True for tokens that could plausibly denote a filesystem location. */
+function hasSeparator(token: string): boolean {
+  return token.includes("/") || token.includes("\\");
+}
+
+function namesASpecificFile(pattern: string): boolean {
+  return /\.[A-Za-z0-9]+$/.test(pattern);
+}
+
 /**
  * Best-effort shell screening. Shell is not a security boundary: a determined
- * model can obfuscate paths or reach the suite through a glob. This blocks the
- * direct attempts, which is enough to keep the harness honest in practice.
+ * model can obfuscate a path or reach the suite through a generated script.
+ * Integrity hashing is the layer that actually catches that.
+ *
+ * Matching is per token rather than a substring scan of the whole command.
+ * A blanket scan cannot tell `npm test` from `cat test/calculator.test.ts`,
+ * and blocking the first would stop the agent running the very suite it is
+ * supposed to be fixing.
  */
 export function assertShellAllowed(cwd: string, command: string): void {
-  const { denyRead, denyWrite } = loadManifest(cwd).guard;
-  const patterns = [...new Set([...denyRead, ...denyWrite])];
-
+  const { guard } = loadManifest(cwd);
+  const patterns = [...new Set([...guard.denyRead, ...guard.denyWrite])].map(
+    (p) => p.replace(/\*+$/, "").replace(/\/$/, "")
+  );
   const normalized = command.replace(/\\/g, "/");
-  for (const pattern of patterns) {
-    const literal = pattern.replace(/\*+/g, "").replace(/\/$/, "");
-    if (literal.length > 0 && normalized.includes(literal)) {
-      throw new GuardViolation(literal, "referencing guarded paths in a shell command is not permitted");
+  const lowerCommand = normalized.toLowerCase();
+
+  for (const token of tokenize(command)) {
+    if (token.startsWith("-")) continue;
+    const candidate = token.replace(/^\.\//, "");
+
+    for (const pattern of patterns) {
+      if (!pattern) continue;
+
+      // A pattern naming a specific file is matched literally. SPEC.md cannot
+      // plausibly be a script argument, so a bare reference is still an attempt.
+      if (namesASpecificFile(pattern) && lowerCommand.includes(pattern.toLowerCase())) {
+        throw new GuardViolation(
+          pattern,
+          "referencing a guarded file in a shell command is not permitted"
+        );
+      }
+
+      // Directory and glob patterns only apply to path-like tokens, so
+      // `npm test` and `npm run build` keep working while `cat test/x.ts` does not.
+      if (hasSeparator(token) && matchesAny(candidate, [pattern])) {
+        throw new GuardViolation(
+          candidate,
+          "referencing a guarded path in a shell command is not permitted"
+        );
+      }
     }
   }
 }
