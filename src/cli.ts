@@ -38,16 +38,37 @@ function printVerificationStart(command: string, attempt: number, maxAttempts: n
 }
 
 function printVerificationResult(passed: boolean, output: string, attempt: number, maxAttempts: number) {
-  if (passed) {
-    console.log("✓ Tests passed");
-    console.log("✓ Verification successful\n");
+  // The output already contains the per-suite lines, so this only frames it.
+  console.log(output);
+  if (!passed && attempt < maxAttempts) {
+    console.log(`Repair attempt ${attempt + 1}/${maxAttempts}`);
+    console.log("────────────────────────────────────\n");
   } else {
-    console.log(`✗ Verification failed\n${output}\n`);
-    if (attempt < maxAttempts) {
-      console.log(`Repair attempt ${attempt + 1}/${maxAttempts}`);
-      console.log("────────────────────────────────────\n");
-    }
+    console.log("");
   }
+}
+
+function printIntegrityBaseline(protectedFiles: number) {
+  console.log("Guard");
+  console.log("────────────────────────────────────");
+  console.log(`  ✓ ${protectedFiles} protected file${protectedFiles === 1 ? "" : "s"} hashed`);
+  if (protectedFiles === 0) {
+    console.log("  ! No highness.config.json found, running unguarded.");
+  }
+  console.log("");
+}
+
+function printIntegrityViolation(violations: { path: string; kind: string }[]) {
+  console.log("INTEGRITY VIOLATION");
+  console.log("────────────────────────────────────");
+  for (const v of violations) {
+    console.log(`  ✗ ${v.path} ${v.kind}`);
+  }
+  console.log("");
+  console.log("The files that define success were changed.");
+  console.log("This result is void. Modifying tests or weakening the");
+  console.log("verification command is not a repair, it is a failed run.");
+  console.log("────────────────────────────────────\n");
 }
 
 function printComplete(success: boolean, attempts: number) {
@@ -111,6 +132,9 @@ Environment:
 
   const model = new OllamaModel();
 
+  let finalSuccess = false;
+  let sawIntegrityViolation = false;
+
   const session = await runAgent({
     model,
     task,
@@ -119,6 +143,13 @@ Environment:
     onEvent: (event: AgentEvent) => {
       switch (event.type) {
         case "agent_thinking":
+          break;
+        case "integrity_baseline":
+          printIntegrityBaseline(event.protectedFiles);
+          break;
+        case "integrity_violation":
+          sawIntegrityViolation = true;
+          printIntegrityViolation(event.violations);
           break;
         case "agent_message":
           printAgentMessage(event.content);
@@ -139,13 +170,17 @@ Environment:
           printVerificationResult(event.result.passed, event.result.output, event.attempt, event.maxAttempts);
           break;
         case "complete":
-          printComplete(event.success, event.attempts);
+          finalSuccess = event.success;
+          if (!sawIntegrityViolation) printComplete(event.success, event.attempts);
           break;
       }
     },
   });
 
-  process.exit(session.verificationResults[session.verificationResults.length - 1]?.passed ? 0 : 1);
+  // An integrity violation voids the run regardless of any test result, so it
+  // takes precedence over the last suite's exit code.
+  const lastPassed = session.verificationResults[session.verificationResults.length - 1]?.passed ?? false;
+  process.exit(finalSuccess && lastPassed && !sawIntegrityViolation ? 0 : 1);
 }
 
 main().catch((error) => {

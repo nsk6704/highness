@@ -1,6 +1,11 @@
-import { Model, Tool, Message, ToolResult, ToolDefinition, DEFAULT_MAX_ATTEMPTS, Session } from "./messages.js";
+import { Model, Tool, Message, ToolResult, ToolDefinition, DEFAULT_MAX_ATTEMPTS, Session, IntegrityViolation } from "./messages.js";
 import { allTools, toolDefinitions } from "../tools/index.js";
-import { runVerification, formatVerificationOutput, detectVerificationCommand } from "../verification/verifier.js";
+import { runSuites, CombinedVerdict, SuiteOutcome } from "../verification/verifier.js";
+import { triageFailure, formatTriage } from "../verification/triage.js";
+import { captureIntegrity, checkIntegrity } from "../verification/integrity.js";
+import { loadManifest } from "../verification/manifest.js";
+import { detectVerificationCommand } from "../verification/verifier.js";
+import { cwd } from "../utils/paths.js";
 
 const SYSTEM_PROMPT = `You are the coding agent running inside Highness.
 
@@ -16,7 +21,17 @@ Rules:
 4. When Highness reports a verification failure, analyze the failure and repair the implementation.
 5. Do not modify unrelated files.
 6. Use the available tools rather than describing commands for the user to run.
-7. When you believe the implementation is complete, provide a concise summary.`;
+7. When you believe the implementation is complete, provide a concise summary.
+
+The tests you can see are not the whole picture. Highness also runs a
+held-out suite you cannot read, and that suite decides the outcome. Passing
+the visible tests is necessary but not sufficient. When a held-out case
+fails, treat its name and error as evidence about behaviour the visible
+tests never covered, and reason from the task description.
+
+You may not modify tests or weaken the verification command. Doing so is
+terminated immediately and the result is void regardless of what the tests
+report afterwards.`;
 
 export interface AgentOptions {
   model: Model;
@@ -28,6 +43,7 @@ export interface AgentOptions {
 
 export type AgentEvent =
   | { type: "start"; task: string }
+  | { type: "integrity_baseline"; protectedFiles: number }
   | { type: "agent_thinking" }
   | { type: "tool_call"; name: string; args: Record<string, unknown> }
   | { type: "tool_limit"; calls: number; limit: number }
@@ -35,6 +51,7 @@ export type AgentEvent =
   | { type: "agent_message"; content: string }
   | { type: "verification_start"; command: string; attempt: number; maxAttempts: number }
   | { type: "verification_result"; result: { passed: boolean; output: string }; attempt: number; maxAttempts: number }
+  | { type: "integrity_violation"; violations: IntegrityViolation[] }
   | { type: "complete"; success: boolean; attempts: number };
 
 const MAX_TOOL_OUTPUT_CHARS = 4000;
@@ -66,12 +83,19 @@ export async function runAgent(options: AgentOptions): Promise<Session> {
     verificationResults: [],
   };
 
-  const verifyCmd = verifyCommand || detectVerificationCommand() || "npm test";
+  const manifest = loadManifest(cwd);
+  const verifyCmd = verifyCommand || manifest.verify || detectVerificationCommand() || "npm test";
+  const heldOutCmd = manifest.heldOut;
+
+  // Snapshot the definitions of success before the model gets a chance to
+  // touch anything. Every later verdict is checked against this.
+  const integrity = captureIntegrity(cwd);
 
   session.messages.push({ role: "system", content: SYSTEM_PROMPT });
   session.messages.push({ role: "user", content: task });
 
   onEvent?.({ type: "start", task });
+  onEvent?.({ type: "integrity_baseline", protectedFiles: integrity.protectedCount });
 
   let attempt = 0;
   let success = false;
@@ -128,38 +152,60 @@ export async function runAgent(options: AgentOptions): Promise<Session> {
       }
     }
 
-    // Run verification
+    // Integrity is checked before verification, never after. If the model
+    // changed what success means, the run is void and no repair is offered.
+    const violations = checkIntegrity(integrity, cwd);
+    if (violations.length > 0) {
+      session.integrityViolations = violations;
+      onEvent?.({ type: "integrity_violation", violations });
+      break;
+    }
+
+    // Run visible suite and, when configured, the harness-owned held-out suite.
     onEvent?.({ type: "verification_start", command: verifyCmd, attempt, maxAttempts });
-    const verificationResult = await runVerification(verifyCmd);
-    session.verificationResults.push(verificationResult);
-    
-    const verificationOutput = formatVerificationOutput(verificationResult, attempt, maxAttempts);
-    onEvent?.({ 
-      type: "verification_result", 
-      result: { passed: verificationResult.passed, output: verificationOutput }, 
-      attempt, 
-      maxAttempts 
+    const verdict: CombinedVerdict = await runSuites(verifyCmd, heldOutCmd);
+
+    for (const suite of verdict.suites) {
+      session.verificationResults.push(suite.result);
+    }
+
+    const verificationOutput = formatVerdict(verdict, attempt, maxAttempts);
+    onEvent?.({
+      type: "verification_result",
+      result: { passed: verdict.passed, output: verificationOutput },
+      attempt,
+      maxAttempts
     });
 
-    if (verificationResult.passed) {
+    if (verdict.passed) {
       success = true;
       break;
     }
 
-    // Add verification failure to conversation for repair
+    // Feed back the failing suite. The authoritative one decides, so when a
+    // held-out suite exists that is the evidence the model gets.
+    const failing = verdict.authoritative.result.passed
+      ? verdict.suites.find((s) => !s.result.passed) ?? verdict.authoritative
+      : verdict.authoritative;
+
+    const raw = `${failing.result.stdout}\n${failing.result.stderr}`;
+    const triage = triageFailure(raw);
+
     session.messages.push({
       role: "verification",
       status: "failed",
-      command: verifyCmd,
+      command: failing.command,
       output: [
-        `Exit code: ${verificationResult.exitCode}`,
+        failing.label === "heldOut"
+          ? "These failures come from the held-out suite, which you cannot read. The case names and errors are the only evidence available."
+          : "",
         "",
-        "Stdout:",
-        truncate(verificationResult.stdout, MAX_TOOL_OUTPUT_CHARS),
+        formatTriage(triage),
         "",
-        "Stderr:",
-        truncate(verificationResult.stderr, MAX_TOOL_OUTPUT_CHARS),
-      ].join("\n"),
+        "Raw output:",
+        truncate(failing.result.stdout, MAX_TOOL_OUTPUT_CHARS),
+        truncate(failing.result.stderr, MAX_TOOL_OUTPUT_CHARS),
+      ].filter(Boolean).join("\n"),
       attempt,
     });
   }
@@ -171,4 +217,39 @@ export async function runAgent(options: AgentOptions): Promise<Session> {
 
 function findTool(name: string): Tool | undefined {
   return allTools.find(t => t.definition.name === name);
+}
+
+const DIVIDER = "────────────────────────────────────";
+
+function suiteLine(suite: SuiteOutcome): string {
+  const { result } = suite;
+  const mark = result.passed ? "✓" : "✗";
+  const name = suite.label === "heldOut" ? "held-out" : "visible";
+  const counts = result.testReport?.recognised
+    ? ` ${result.testReport.passed ?? 0} passed, ${result.testReport.failed ?? 0} failed`
+    : "";
+  const reason = result.vacuous ? " (ran no tests)" : "";
+  return `  ${mark} ${name}${counts}${reason}`;
+}
+
+function formatVerdict(verdict: CombinedVerdict, attempt: number, maxAttempts: number): string {
+  const lines = ["Verification", DIVIDER];
+
+  for (const suite of verdict.suites) {
+    lines.push(suiteLine(suite));
+  }
+
+  if (verdict.passed) {
+    const hadHeldOut = verdict.suites.some((s) => s.label === "heldOut");
+    lines.push(
+      "",
+      hadHeldOut
+        ? "✓ Visible and held-out suites both green"
+        : "✓ Verification successful"
+    );
+    return lines.join("\n");
+  }
+
+  lines.push("", `✗ Verification failed (attempt ${attempt}/${maxAttempts})`);
+  return lines.join("\n");
 }
