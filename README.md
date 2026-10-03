@@ -326,6 +326,3 @@ rather than crashing.
 - [ ] OS-level sandbox so `shell` is a real boundary
 - [ ] Support for multiple held-out shards and per-suite timeouts
 
-## License
-
-Unlicensed for now — add a LICENSE before making this a real OSS release.
