@@ -102,6 +102,17 @@ export interface VerificationResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /** Counts parsed from the runner's summary, when the framework was recognised. */
+  testReport?: {
+    recognised: boolean;
+    framework: string | null;
+    passed: number | null;
+    failed: number | null;
+    total: number | null;
+    emptySignal: boolean;
+  };
+  /** Exited 0 but executed zero tests. Never counts as success. */
+  vacuous?: boolean;
 }
 
 export interface Session {

@@ -1,4 +1,5 @@
 import { VerificationResult } from "../agent/messages.js";
+import { analyzeTestOutput, ranNoTests, TestReport } from "./test-count.js";
 import { spawn } from "child_process";
 
 export function detectVerificationCommand(): string | null {
@@ -47,12 +48,22 @@ export async function runVerification(command: string): Promise<VerificationResu
     });
 
     proc.on("close", (code) => {
+      const combined = stdout + stderr;
+      const report = analyzeTestOutput(combined);
+
+      // A runner that exits 0 without executing anything has not verified
+      // anything. Treating that as PASS would let the harness certify work
+      // that was never exercised.
+      const vacuous = code === 0 && ranNoTests(report);
+
       resolve({
-        passed: code === 0,
+        passed: code === 0 && !vacuous,
         command,
         exitCode: code ?? -1,
         stdout,
         stderr,
+        testReport: report,
+        vacuous,
       });
     });
 
@@ -63,16 +74,48 @@ export async function runVerification(command: string): Promise<VerificationResu
         exitCode: -1,
         stdout: "",
         stderr: String(error),
+        testReport: analyzeTestOutput(""),
+        vacuous: false,
       });
     });
   });
 }
 
 export function formatVerificationOutput(result: VerificationResult, attempt: number, maxAttempts: number): string {
-  const status = result.passed ? "✓" : "✗";
-  const header = result.passed 
-    ? `Verification\n────────────────────────────────────\n${status} Tests passed\n${status} Verification successful`
-    : `Verification\n────────────────────────────────────\n${status} ${result.command} failed (exit code: ${result.exitCode})\n${result.stdout}\n${result.stderr}\n\nRepair attempt ${attempt}/${maxAttempts}\n────────────────────────────────────`;
-  
-  return header;
+  const divider = "────────────────────────────────────";
+
+  if (result.vacuous) {
+    return [
+      "Verification",
+      divider,
+      `✗ ${result.command} exited 0 but ran no tests`,
+      "",
+      "The runner matched zero tests, so nothing was verified. This is a",
+      "failure, not a pass. Check that test files exist and are discovered.",
+    ].join("\n");
+  }
+
+  const counts = result.testReport?.recognised
+    ? ` (${result.testReport.passed ?? 0} passed, ${result.testReport.failed ?? 0} failed)`
+    : "";
+
+  if (result.passed) {
+    return [
+      "Verification",
+      divider,
+      `✓ Tests passed${counts}`,
+      "✓ Verification successful",
+    ].join("\n");
+  }
+
+  return [
+    "Verification",
+    divider,
+    `✗ ${result.command} failed (exit code: ${result.exitCode})${counts}`,
+    result.stdout,
+    result.stderr,
+    "",
+    `Repair attempt ${attempt}/${maxAttempts}`,
+    divider,
+  ].join("\n");
 }
