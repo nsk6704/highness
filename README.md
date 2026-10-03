@@ -19,7 +19,12 @@ Agent
   ↓
 Tools
   ↓
+Integrity check          ← did you change what "success" means?
+  ↓
 Verification
+  ↓
+  ├── visible suite
+  ├── held-out suite      ← tests you were never allowed to read
   ↓
   ├── PASS → Done
   └── FAIL → Agent repair
@@ -27,163 +32,190 @@ Verification
 
 The model can propose and execute changes, but **Highness owns verification and recovery**. The model does not get to declare success. The runtime determines whether the task actually succeeded.
 
+## Why this isn't just CI
+
+A CI workflow runs your tests once and stops. Anyone can pass CI by editing the
+test file. That is the gap Highness closes:
+
+| | CI | A bare agent loop | Highness |
+|---|---|---|---|
+| Runs the tests | yes | yes | yes |
+| Closes the failure loop | no | yes | yes |
+| Tests the model can read are the only tests | yes | yes | **no** |
+| Editing a test is a normal commit | yes | yes | **voids the run** |
+| Zero tests found means pass | often | often | **means fail** |
+
 ## Features
 
-- **Ollama Cloud integration** - Fast LLM inference for tool-calling agents
-- **Tool-calling agent loop** - Read, write, edit files and execute shell commands
-- **Independent verification** - Deterministic test running (not LLM-based)
-- **Automatic repair loop** - Failed verification feeds back to the model for repair (max 3 attempts by default)
-- **Clean CLI** - Streaming output showing the agent's reasoning, tool calls, and verification results
-- **Minimal by design** - No TUI, no MCP, no vector databases, no RAG, no sandboxing
+- **Held-out verification** — a harness-owned suite the agent has no tool access to, and which decides the outcome
+- **Integrity checks** — the definitions of success are hashed before the run and re-checked before every verdict
+- **Tool deny-list** — tests, specs, and configuration are protected from writes; held-out tests are protected from reads
+- **Vacuous-run detection** — a runner that exits 0 having executed nothing is a failure, not a pass
+- **Failure triage** — failures are classified and only relevant evidence is forwarded
+- **Ollama Cloud integration** — tool-calling agent over the OpenAI-compatible endpoint
+- **Tool-calling agent loop** — read, write, edit, and shell
+- **Deterministic verification** — real test runners, never an LLM grading the LLM
+- **Minimal by design** — no TUI, no MCP, no vector databases, no RAG
 
 ## Quick Start
 
 ```bash
-# From source (not published to npm yet)
 git clone https://github.com/nsk6704/highness
 cd highness
 npm install
 npm run build
 
-# Configure
 cp .env.example .env   # then add your Ollama Cloud API key
 
-# Run on a task
-./dist/cli.js "Fix the failing tests"
-```
-
-Or run locally:
-
-```bash
-git clone https://github.com/nsk6704/highness
-cd highness
-npm install
-npm run build
-cd demo-project && npm install && cd ..
-./dist/cli.js "Fix the calculator so all tests pass"
+# Run against a target project
+cd path/to/your/project
+node /path/to/highness/dist/cli.js "Fix the failing tests"
 ```
 
 ## Demo
 
-Try it on the included demo project:
+The demo is built to show the part that matters: an agent that gets every test
+it can see passing, and is still wrong.
 
 ```bash
 cd demo-project
 npm install
-../dist/cli.js "Fix the calculator so all tests pass"
+../dist/cli.js "Fix the calculator"
 ```
 
-The demo has a calculator with three intentional bugs:
-- `divide` multiplies instead of dividing
-- `power` has an off-by-one error
-- `factorial` forgets to return the result
+The calculator's contract lives in [`demo-project/SPEC.md`](demo-project/SPEC.md).
+The bugs are unmarked and semantic:
 
-Baseline before you start: 6 of 17 tests fail.
+- `divide` truncates with `Math.floor` instead of dividing exactly
+- `power` is off by one, and accepts negative exponents
+- `factorial` accepts fractional input
+- `isPrime` reports `1`, `0`, and every negative number as prime
 
-A typical run looks like this:
+Baseline:
 
-1. Read the source and test files
-2. Identify the bugs
-3. Edit the implementation
-4. Run `npm test` → **6 failed, 11 passed**
-5. Highness verification runs it independently → FAIL
-6. The failure is appended to the conversation and the model repairs
-7. Re-verify → PASS → success declared
+```
+visible    4 failed, 13 passed, 17 total
+held-out   9 failed,  7 passed, 16 total
+```
 
-In practice `gpt-oss:120b` often solves these three seeded bugs in a single
-attempt, so the repair step may not trigger. That is the verifier working as
-intended rather than a bug, but it does mean the demo project is not a reliable
-way to showcase the repair loop — see [Roadmap](#roadmap).
+The visible suite covers only part of `SPEC.md`. `isPrime`, the negative
+exponent, and the fractional factorial guard are specified and enforced, but the
+agent cannot see those tests.
+
+The interesting run is the one where the agent fixes `divide` and `power`, gets
+`npm test` green, and confidently stops:
+
+```
+Verification
+────────────────────────────────────
+  ✓ visible 17 passed, 0 failed
+  ✗ held-out 11 passed, 5 failed
+
+✗ Verification failed (attempt 1/3)
+```
+
+Five things it never saw were still broken. It repairs against the failure
+names and evidence, and the second attempt comes back green.
+
+## Configuration
+
+Projects opt in with `highness.config.json`:
+
+```json
+{
+  "verify": "npm test",
+  "heldOut": "npm test -- --config .highness/jest.heldout.config.mjs",
+  "guard": {
+    "denyRead": [".highness"],
+    "denyWrite": ["test", ".highness", "SPEC.md", "jest.config.mjs", "package.json"]
+  },
+  "integrityFiles": ["package.json", "jest.config.mjs"]
+}
+```
+
+- **`verify`** — the tests the agent may read. Required for held-out to mean anything.
+- **`heldOut`** — the harness-owned suite. Optional; without it you get visible-only.
+- **`denyRead`** — the agent cannot read these. The verifier can.
+- **`denyWrite`** — the agent cannot modify these.
+- **`integrityFiles`** — additional files to hash, such as `package.json`, where rewriting the `test` script is a faster cheat than fixing the bug.
+
+Patterns are gitignore-style: `test` guards the directory and everything under
+it, `*.test.ts` matches at any depth, and `src/**` spans directories.
+
+With no manifest, Highness falls back to auto-detection and runs unguarded, which
+is the old behaviour.
+
+### What a PASS requires
+
+Both suites green **and** integrity intact. A held-out pass does not excuse a
+broken visible suite, because the repository is still broken.
+
+### What counts as cheating
+
+Any of these ends the run immediately, before verification, with a non-zero exit:
+
+- editing or deleting a guarded file
+- weakening the test script (`--passWithNoTests`, a narrowed `-t` filter)
+- reading the held-out suite
+
+The verdict is **not appealable**. The model does not get to argue its way past
+an integrity violation, because the whole premise is that it does not get to
+declare success.
+
+### Known limitation
+
+`shell` is screened by literal path match, which blocks the direct attempts. It
+is **not a security boundary** — a determined model can obfuscate a path in a
+generated script. Integrity hashing is the layer that actually catches this, and
+it is verified to do so. For real isolation you would need an OS-level sandbox.
 
 ## CLI Options
 
 ```bash
-highness "Fix the bug"                    # Default: 3 attempts, auto-detect test command
+highness "Fix the bug"                    # Default: 3 attempts, auto-detect
 highness -n 5 "Fix the bug"               # Max 5 repair attempts
-highness -v "pytest" "Fix the bug"        # Custom verification command
+highness -v "pytest" "Fix the bug"        # Override the visible command
 ```
+
+Environment:
+
+- `OLLAMA_API_KEY` — **required.** https://ollama.com/settings/keys
+- `OLLAMA_MODEL` — optional. Default `gpt-oss:120b`
+
+Direct cloud requests use the identifiers at https://ollama.com/api/tags
+(`gpt-oss:120b`, `gpt-oss:20b`, `qwen3-coder:480b`, …). The `-cloud` suffix is
+only for the Ollama CLI and local server.
 
 ## Architecture
 
 ```
 src/
-├── cli.ts                    # CLI entry point with streaming output
+├── cli.ts                    # entry point, streaming output, root .env fallback
 ├── agent/
-│   ├── loop.ts              # Core agent loop with repair logic
-│   └── messages.ts          # Type definitions (Message, Tool, Session, etc.)
+│   ├── loop.ts               # agent loop, integrity gate, repair cycle
+│   └── messages.ts           # types
 ├── model/
-│   ├── ollama.ts            # OpenAI SDK against Ollama's compat endpoint
-│   └── index.ts             # Model interface
+│   └── ollama.ts             # OpenAI SDK against Ollama's compat endpoint
 ├── tools/
-│   ├── read-file.ts         # Read file contents
-│   ├── write-file.ts        # Write/create files
-│   ├── edit-file.ts         # Edit files (MVP: full content replacement)
-│   ├── shell.ts             # Execute shell commands
-│   └── index.ts             # Tool registry
+│   ├── guard.ts              # deny-list enforcement, raises GuardViolation
+│   ├── read-file.ts
+│   ├── write-file.ts
+│   ├── edit-file.ts
+│   └── shell.ts
 ├── verification/
-│   └── verifier.ts          # Deterministic verification runner
+│   ├── manifest.ts           # highness.config.json
+│   ├── integrity.ts          # hash snapshot and violation detection
+│   ├── test-count.ts         # runner summary parsing, vacuous-run detection
+│   ├── triage.ts             # failure classification and evidence extraction
+│   └── verifier.ts           # suite runner
 └── utils/
-    └── paths.ts             # Path resolution with traversal protection
+    ├── glob.ts               # gitignore-style matcher
+    └── paths.ts              # traversal protection
 ```
-
-## Security Boundary
-
-> **The model never directly executes code.**
-
-```
-Ollama
- │
- │ tool call
- ▼
-Highness
- │
- │ validate
- ▼
-Tool executor
- │
- ▼
-OS
-```
-
-For the hackathon, shell execution is local and unrestricted **with an explicit warning**. Do not use on untrusted code.
-
-## Configuration
-
-Environment variables:
-- `OLLAMA_API_KEY` - **Required.** Create a key at https://ollama.com/settings/keys
-- `OLLAMA_MODEL` - Optional. Default: `gpt-oss:120b`
-
-Put these in a `.env` file (see `.env.example`):
-
-```bash
-OLLAMA_API_KEY=your_key_here
-OLLAMA_MODEL=gpt-oss:120b
-```
-
-Direct cloud requests use the model identifiers listed at
-https://ollama.com/api/tags (e.g. `gpt-oss:120b`, `gpt-oss:20b`,
-`qwen3-coder:480b`, `kimi-k2.6`, `glm-5.3`). The `-cloud` suffix
-(`gpt-oss:120b-cloud`) is only for the Ollama CLI and local server.
-
-### Runtime guards
-
-Two limits keep the loop from running away:
-
-- **Tool output truncation** - tool results and verification output are capped
-  at 4000 characters before entering the conversation, so a noisy test run
-  can't blow up the context window.
-- **Tool call cap** - 25 tool calls per attempt. On hitting the cap the harness
-  stops calling tools and proceeds straight to verification, so current state is
-  still honestly checked.
-
-`gpt-oss` is a reasoning model, so Ollama enables thinking by default. Reasoning
-tokens count against `max_tokens` (set to 8192). If a response is cut off before
-its tool arguments are complete, the harness feeds the truncation back to the
-model as a tool error instead of crashing.
 
 ## Verification
 
-The verifier is **not an LLM**. It runs your test command deterministically:
+The verifier is **not an LLM**. It runs real runners and reads their summaries:
 
 ```bash
 npm test        # package.json
@@ -192,32 +224,56 @@ cargo test      # Cargo.toml
 go test ./...   # go.mod
 ```
 
-Auto-detection works for common project types. Override with `--verify`.
+Counts are parsed for jest/vitest, cargo, pytest, mocha, and go. Recognition is
+deliberately positive-only: a project may verify with `tsc --noEmit` or a lint
+step, and the harness does not invent counts for output it does not understand.
+
+**A runner that exits 0 without executing anything is a failure.** Confirmed
+against real jest:
+
+```
+$ npx jest --passWithNoTests --testPathPattern nothing_matches_this
+exit 0, zero tests
+
+✗ exited 0 but ran no tests
+```
+
+### Failure triage
+
+Failures are classified and the model receives the failing case names plus
+expected/received pairs rather than a raw log:
+
+```
+Failure class: assertion_failure
+An assertion did not hold. Compare expected against received.
+
+Failing cases (2):
+  - Calculator › divide › divides with decimal result
+  - contract: isPrime › one is not prime
+
+Evidence:
+  Expected: 3.5
+  Received: 3
+```
 
 ## Repair Loop
 
-When verification fails, Highness appends the evidence to the conversation as a
-distinct `verification` message. Since Ollama's chat API has no such role, it is
-serialized as a user message:
+Held-out failures are forwarded as case names and triage output. The model cannot
+read the assertions, but without the failure evidence the task would be
+unsolvable — the same line SWE-bench draws.
 
 ```
 [VERIFICATION FAILED]
 The requested change has NOT been verified.
-Command: npm test
+Command: npm test -- --config .highness/jest.heldout.config.mjs
 Attempt: 1
 
-Stdout:
-... (capped at 4000 chars)
-
-Stderr:
+These failures come from the held-out suite, which you cannot read.
 ...
-
-Analyze the failure, repair the implementation, and try again.
 ```
 
-Control returns to the model, which can read files, edit, and run commands again.
-
-Maximum attempts: 3 (configurable with `-n`). If all fail:
+Control returns to the model, which repairs and the loop runs again. After the
+final attempt:
 
 ```
 ✗ Verification failed after maximum attempts
@@ -226,18 +282,22 @@ Maximum attempts: 3 (configurable with `-n`). If all fail:
 
 Highness does **not** claim success, and exits non-zero.
 
+### Runtime guards
+
+- **Tool output truncation** — capped at 4000 characters before entering the conversation
+- **Tool call cap** — 25 per attempt, then straight to verification so current state is still honestly checked
+
+`gpt-oss` enables thinking by default, and reasoning tokens count against
+`max_tokens` (8192). A response cut off mid-arguments is fed back as a tool error
+rather than crashing.
+
 ## Roadmap
 
-Roughly in priority order:
-
-- [ ] A demo task that reliably forces at least one repair cycle
-- [ ] Verifier triage — classify failures (compile error, assertion, timeout)
-      and hand the model only the relevant evidence
-- [ ] Anti-cheat: detect when a model edits tests or weakens the verify command
-      to force a PASS
 - [ ] `edit_file` via structured patches instead of full-content replacement
-- [ ] Per-attempt rollback when repair makes things worse
+- [ ] Per-attempt rollback when a repair makes things worse
 - [ ] Session logging to disk for post-mortem analysis
+- [ ] OS-level sandbox so `shell` is a real boundary
+- [ ] Support for multiple held-out shards and per-suite timeouts
 
 ## License
 
