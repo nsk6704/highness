@@ -1,0 +1,27 @@
+{
+  "name": "highness",
+  "version": "0.1.0",
+  "description": "Minimal verification-first coding agent harness",
+  "main": "dist/cli.js",
+  "bin": {
+    "highness": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.5",
+    "openai": "^7.27.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
