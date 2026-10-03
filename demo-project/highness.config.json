@@ -1,0 +1,9 @@
+{
+  "verify": "npm test",
+  "heldOut": "npm test -- --config .highness/jest.heldout.config.mjs",
+  "guard": {
+    "denyRead": [".highness"],
+    "denyWrite": ["test", ".highness", "SPEC.md", "jest.config.mjs", "package.json"]
+  },
+  "integrityFiles": ["package.json", "jest.config.mjs"]
+}

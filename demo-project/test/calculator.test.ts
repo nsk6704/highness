@@ -38,7 +38,7 @@ describe("Calculator", () => {
   });
 
   describe("divide", () => {
-    test("divides two numbers", () => {
+    test("divides evenly", () => {
       expect(calc.divide(10, 2)).toBe(5);
     });
 

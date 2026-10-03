@@ -15,12 +15,10 @@ export class Calculator {
     if (b === 0) {
       throw new Error("Division by zero");
     }
-    // BUG: Should be a / b, but we're returning a * b
-    return a * b;
+    return Math.floor(a / b);
   }
 
   power(base: number, exponent: number): number {
-    // BUG: Off-by-one error in loop
     let result = 1;
     for (let i = 0; i <= exponent; i++) {
       result *= base;
@@ -32,14 +30,19 @@ export class Calculator {
     if (n < 0) {
       throw new Error("Factorial not defined for negative numbers");
     }
-    if (n === 0 || n === 1) {
-      return 1;
-    }
-    // BUG: Missing return statement
     let result = 1;
     for (let i = 2; i <= n; i++) {
       result *= i;
     }
-    // Forgot to return result
+    return result;
+  }
+
+  isPrime(n: number): boolean {
+    for (let i = 2; i * i <= n; i++) {
+      if (n % i === 0) {
+        return false;
+      }
+    }
+    return true;
   }
 }
